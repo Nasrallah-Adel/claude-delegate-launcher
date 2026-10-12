@@ -1,0 +1,11 @@
+{
+  "name": "delegate-launcher",
+  "version": "0.1.0",
+  "description": "Buttons above the prompt that start a task for your *-delegate skills (codex, agy, copilot, ...), a /delegate command, and a toast when a relay run finishes.",
+  "author": {
+    "name": "Nasrallah Adel"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/Nasrallah-Adel/claude-delegate-launcher",
+  "types": "./types/index.d.ts"
+}

@@ -1,0 +1,16 @@
+{
+  "name": "nasrallah-mods",
+  "owner": {
+    "name": "Nasrallah Adel"
+  },
+  "metadata": {
+    "description": "Claude Code mods by Nasrallah Adel."
+  },
+  "plugins": [
+    {
+      "name": "delegate-launcher",
+      "source": "./",
+      "description": "One button per *-delegate skill above the prompt, /delegate, and a done toast for relay runs. Built for amElnagdy/delegate-skills."
+    }
+  ]
+}
