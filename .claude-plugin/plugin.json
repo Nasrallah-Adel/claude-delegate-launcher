@@ -1,6 +1,6 @@
 {
   "name": "delegate-launcher",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Buttons above the prompt that start a task for your *-delegate skills, /delegate, a live Delegates pane per relay run with Continue and resume, and a toast when a run finishes.",
   "author": {
     "name": "Nasrallah Adel"
@@ -14,6 +14,12 @@
       "title": "Open the Delegates pane when a run starts",
       "default": true,
       "description": "Show the live Delegates pane each time a delegate relay starts (needs a wide enough terminal)"
+    },
+    "openPaneOnStart": {
+      "type": "boolean",
+      "title": "Open the Delegates pane on a new session and after /clear",
+      "default": true,
+      "description": "Show the Delegates pane (delegate buttons and recent runs) when a session starts or is cleared"
     }
   }
 }

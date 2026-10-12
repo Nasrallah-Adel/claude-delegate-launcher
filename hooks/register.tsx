@@ -50,6 +50,7 @@ const CONFIG_PANE = 'delegate-config'
 const RUNS_PANE = 'delegate-runs'
 const POLL_MS = 2_000
 const RUN_TTL_MS = 3 * 60 * 60 * 1000
+const CLEAR_DELAY_MS = 300
 const STORE_ENABLED = 'enabled'
 const STORE_RUNS = 'runs'
 
@@ -188,30 +189,49 @@ async function copyResume($: EngineInterface, run: Run, surface: string | undefi
   $.ui.toast(copied.isCopied ? `Copied: ${command}` : `Copy failed; run: ${command}`)
 }
 
+/** Discovers delegates, restores the pick and the runs, resumes polling, opens the pane. */
+async function boot($: EngineInterface, openPane: boolean): Promise<void> {
+  await $.command.register({
+    name: 'delegate',
+    description: 'Delegate a task: /delegate <codex|agy|…> <task>, /delegate watch, /delegate config, /delegate list',
+    argumentHint: '<name> <task> | watch | config | list',
+  })
+  const skills = await discover($)
+  await update($, found, () => skills)
+  const stored = await $.store.get(STORE_ENABLED)
+  const picked = Array.isArray(stored) ? stored.filter((s): s is string => skills.includes(String(s))) : null
+  await update($, enabled, () => picked)
+  const saved = await $.store.get(STORE_RUNS)
+  if (Array.isArray(saved) && saved.length > 0) {
+    const list = await setRuns($, () => saved as Run[])
+    await update($, selected, () => list[0]?.outDir ?? null)
+    await refreshTail($).catch(() => undefined)
+    if (list.some(isRunning)) startPolling($)
+  }
+  if (picked === null && skills.length > 0) {
+    $.ui.toast(`delegate-launcher: found ${skills.length} delegates; press Set up above the prompt or run /delegate config`)
+  }
+  if (openPane && skills.length > 0) openRuns($, false)
+}
+
 export const register: Register = (on, options) => {
   const autoOpen = options.autoOpenPane !== false
+  const openOnStart = options.openPaneOnStart !== false
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({
-      name: 'delegate',
-      description: 'Delegate a task: /delegate <codex|agy|…> <task>, /delegate watch, /delegate config, /delegate list',
-      argumentHint: '<name> <task> | watch | config | list',
-    })
-    const skills = await discover($)
-    await update($, found, () => skills)
-    const stored = await $.store.get(STORE_ENABLED)
-    const picked = Array.isArray(stored) ? stored.filter((s): s is string => skills.includes(String(s))) : null
-    await update($, enabled, () => picked)
-    const saved = await $.store.get(STORE_RUNS)
-    if (Array.isArray(saved) && saved.length > 0) {
-      const list = await setRuns($, () => saved as Run[])
-      await update($, selected, () => list[0]?.outDir ?? null)
-      if (list.some(isRunning)) startPolling($)
-    }
-    if (picked === null && skills.length > 0) {
-      $.ui.toast(`delegate-launcher: found ${skills.length} delegates; press Set up above the prompt or run /delegate config`)
-    }
+    await boot($, openOnStart)
     return next(e)
+  })
+
+  // /clear raises no session.start: start over once the old conversation has ended.
+  on('session.end', async ($, e, next) => {
+    const ended = await next(e)
+    if (e.reason === 'clear') {
+      $.clock.after(CLEAR_DELAY_MS, () => {
+        boot($, openOnStart).catch((err) => $.ui.log(`delegate-launcher: start after /clear failed: ${errText(err)}`, { to: 'debug' }))
+      })
+    }
+    return ended
   })
 
   on('command.run', { command: 'delegate' }, async ($, e) => {
@@ -329,10 +349,27 @@ export const register: Register = (on, options) => {
     const chosen = await read($, selected)
     const current = list.find((r) => r.outDir === chosen) ?? list[0]
     const lines = await read($, tail)
-    if (!current) return <Text dimColor>No delegate runs yet. Press a delegate button above the prompt to start one.</Text>
+    const picked = (await read($, enabled)) ?? (await read($, found))
+    const launch = (
+      <Box>
+        <Text dimColor>new </Text>
+        {picked.map((skill) => (
+          <Button key={`p-${skill}`} label={shortName(skill)} onPress={() => void prefill($, skill)} />
+        ))}
+      </Box>
+    )
+    if (!current) {
+      return (
+        <Box flexDirection="column">
+          {launch}
+          <Text dimColor>No delegate runs yet. Press a delegate to write a task for it.</Text>
+        </Box>
+      )
+    }
     const resume = resumeCommand(current)
     return (
       <Box flexDirection="column">
+        {launch}
         {list.map((run) => (
           <Button
             key={`r-${run.outDir}`}

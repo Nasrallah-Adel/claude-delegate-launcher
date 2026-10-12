@@ -25,13 +25,14 @@ type Calls = {
   files: Map<string, string>
   ticks: (() => void)[]
   copied: string[]
+  opened: string[]
   draft: string
 }
 
 function fakeEngine(on: On, stored: Record<string, unknown> = {}): Calls {
   const c: Calls = {
     filled: [], submitted: [], toasts: [], store: new Map(Object.entries(stored)),
-    files: new Map(), ticks: [], copied: [], draft: '',
+    files: new Map(), ticks: [], copied: [], opened: [], draft: '',
   }
   const value = (v: unknown) => ({ value: v }) as never
   on('env.get', ($, e) => value((e as { name: string }).name === 'HOME' ? HOME : '/tmp/t/'))
@@ -59,7 +60,8 @@ function fakeEngine(on: On, stored: Record<string, unknown> = {}): Calls {
   on('prompt.submit', ($, e) => { c.submitted.push(e.text); return { text: e.text, origin: e.origin } as never })
   on('ui.log', () => value(undefined))
   on('ui.status', () => value(undefined))
-  on('ui.open', () => value({ isPlaced: true }))
+  on('ui.open', ($, e) => { c.opened.push((e as { id: string }).id); return value({ isPlaced: true }) })
+  on('session.end', ($, e) => ({ sessionId: (e as { sessionId: string }).sessionId }) as never)
   on('ui.copy', ($, e) => { c.copied.push((e as { text: string }).text); return value({ isCopied: true }) })
   on('process.run', ($, e) => {
     const argv = (e as { argv: string[] }).argv
@@ -294,5 +296,34 @@ describe('the Delegates pane', () => {
     await start($)
     const ui = await band($, 'terminal')
     expect(await ui.find({ type: 'Button', key: 'runs' })).toBeDefined()
+  })
+})
+
+describe('starting', () => {
+  test('a new session opens the Delegates pane with launch buttons', async ($, on) => {
+    const c = fakeEngine(on, { enabled: ['codex-delegate'] })
+    await start($)
+    expect(c.opened).toEqual(['delegate-runs'])
+    const pane = await $.ui.mount({ plugin: 'delegate-launcher', surface: 'terminal', component: 'Pane', requestId: 'delegate-runs', props: {} as never })
+    await pane.press({ key: 'p-codex-delegate' })
+    expect(c.filled.at(-1)).toBe('/codex-delegate ')
+  })
+
+  test('/clear starts it again; other endings do not', async ($, on) => {
+    const c = fakeEngine(on, { enabled: ['codex-delegate'] })
+    await start($)
+    c.opened.length = 0
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} } as never)
+    await settle()
+    expect(c.opened).toEqual(['delegate-runs'])
+    await $.session.end({ reason: 'prompt_input_exit', sessionId: 's2', resume: {} } as never)
+    await settle()
+    expect(c.opened).toEqual(['delegate-runs'])
+  })
+
+  test('openPaneOnStart off keeps the pane closed', { options: { openPaneOnStart: false } }, async ($, on) => {
+    const c = fakeEngine(on, { enabled: ['codex-delegate'] })
+    await start($)
+    expect(c.opened).toEqual([])
   })
 })
