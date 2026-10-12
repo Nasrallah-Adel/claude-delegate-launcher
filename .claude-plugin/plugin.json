@@ -1,11 +1,19 @@
 {
   "name": "delegate-launcher",
-  "version": "0.1.0",
-  "description": "Buttons above the prompt that start a task for your *-delegate skills (codex, agy, copilot, ...), a /delegate command, and a toast when a relay run finishes.",
+  "version": "0.2.0",
+  "description": "Buttons above the prompt that start a task for your *-delegate skills, /delegate, a live Delegates pane per relay run with Continue and resume, and a toast when a run finishes.",
   "author": {
     "name": "Nasrallah Adel"
   },
   "license": "MIT",
   "homepage": "https://github.com/Nasrallah-Adel/claude-delegate-launcher",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoOpenPane": {
+      "type": "boolean",
+      "title": "Open the Delegates pane when a run starts",
+      "default": true,
+      "description": "Show the live Delegates pane each time a delegate relay starts (needs a wide enough terminal)"
+    }
+  }
 }

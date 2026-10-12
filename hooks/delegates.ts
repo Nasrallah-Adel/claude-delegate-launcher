@@ -11,7 +11,8 @@ export const SKILL_DIRS = ['.claude/skills', '.agents/skills'] as const
 export const OUT_ROOT = 'delegate-launcher'
 
 const DELEGATE_NAME = /^[a-z0-9][a-z0-9-]*-delegate$/
-const RELAY = /([A-Za-z0-9_.-]+-delegate)\/scripts\/relay\.mjs(["']?)/
+// Only `node … relay.mjs` runs it; a grep, cat or sed that names the path does not.
+const RELAY = /(?:^|[\s;&|(])node\s+(?:-\S+\s+)*["']?[^"'\s]*?([A-Za-z0-9_.-]+-delegate)\/scripts\/relay\.mjs["']?/
 const OUT_DIR = /--out-dir(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/
 const HELP = /(^|\s)(--help|-h)(\s|$)/
 const SAFE_PATH = /^[A-Za-z0-9_./-]+$/
@@ -51,13 +52,15 @@ export const delegatePrompt = (skill: string, task: string): string =>
 export type DelegateArgs =
   | { kind: 'config' }
   | { kind: 'list' }
+  | { kind: 'watch' }
   | { kind: 'pick'; name: string; task: string }
 
-/** `/delegate`, `/delegate config`, `/delegate list`, `/delegate codex fix x`. */
+/** `/delegate`, `/delegate config`, `/delegate list`, `/delegate watch`, `/delegate codex fix x`. */
 export function parseDelegateArgs(args: string): DelegateArgs {
   const text = args.trim()
   if (text === '' || text === 'config') return { kind: 'config' }
   if (text === 'list') return { kind: 'list' }
+  if (text === 'watch' || text === 'runs') return { kind: 'watch' }
   const [name, ...rest] = text.split(/\s+/)
   return { kind: 'pick', name: name ?? '', task: rest.join(' ') }
 }
@@ -82,7 +85,7 @@ export function withOutDir(command: string, dir: string): string {
   return command.replace(RELAY, (whole) => `${whole} --out-dir '${dir}'`)
 }
 
-export type RelayResult = { status: string; touched: number | null }
+export type RelayResult = { status: string; touched: number | null; data: Record<string, unknown> }
 
 /** Reads the fields the toast needs; rejects anything not a relay result. */
 export function parseResult(text: string): RelayResult {
@@ -90,7 +93,7 @@ export function parseResult(text: string): RelayResult {
   if (typeof data !== 'object' || data === null) throw new Error('result.json is not an object')
   const { status, touchedFiles } = data as { status?: unknown; touchedFiles?: unknown }
   if (typeof status !== 'string') throw new Error('result.json has no status')
-  return { status, touched: Array.isArray(touchedFiles) ? touchedFiles.length : null }
+  return { status, touched: Array.isArray(touchedFiles) ? touchedFiles.length : null, data: data as Record<string, unknown> }
 }
 
 /** `codex finished: completed, 3 files touched — review the diff`. */

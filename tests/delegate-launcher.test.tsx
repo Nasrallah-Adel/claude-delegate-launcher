@@ -12,6 +12,7 @@ import {
   resultLine,
   withOutDir,
 } from '../hooks/delegates'
+import { age, continueText, newRun, resumeCommand, summarizeEvent } from '../hooks/runs'
 
 const HOME = '/home/me'
 const SKILLS = ['codex-delegate', 'agy-delegate', 'code-review', 'copilot-delegate']
@@ -23,13 +24,14 @@ type Calls = {
   store: Map<string, unknown>
   files: Map<string, string>
   ticks: (() => void)[]
+  copied: string[]
   draft: string
 }
 
 function fakeEngine(on: On, stored: Record<string, unknown> = {}): Calls {
   const c: Calls = {
     filled: [], submitted: [], toasts: [], store: new Map(Object.entries(stored)),
-    files: new Map(), ticks: [], draft: '',
+    files: new Map(), ticks: [], copied: [], draft: '',
   }
   const value = (v: unknown) => ({ value: v }) as never
   on('env.get', ($, e) => value((e as { name: string }).name === 'HOME' ? HOME : '/tmp/t/'))
@@ -55,6 +57,14 @@ function fakeEngine(on: On, stored: Record<string, unknown> = {}): Calls {
   on('prompt.read', () => value({ text: c.draft, cursor: c.draft.length }))
   on('prompt.fill', ($, e) => { c.filled.push(e.text); return { isFilled: true } as never })
   on('prompt.submit', ($, e) => { c.submitted.push(e.text); return { text: e.text, origin: e.origin } as never })
+  on('ui.log', () => value(undefined))
+  on('ui.status', () => value(undefined))
+  on('ui.open', () => value({ isPlaced: true }))
+  on('ui.copy', ($, e) => { c.copied.push((e as { text: string }).text); return value({ isCopied: true }) })
+  on('process.run', ($, e) => {
+    const argv = (e as { argv: string[] }).argv
+    return value({ exitCode: 0, stdout: c.files.get(argv.at(-1) ?? '') ?? '', stderr: '' })
+  })
   on('ui.toast', ($, e) => { c.toasts.push((e as { text: string }).text); return value(undefined) })
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -99,6 +109,9 @@ describe('helpers', () => {
     expect(findRelayRun(`${cmd} --out-dir=/o/x; echo`)?.outDir).toBe('/o/x')
     expect(findRelayRun('node /x/codex-delegate/scripts/relay.mjs --help')).toBeUndefined()
     expect(findRelayRun('ls -la')).toBeUndefined()
+    expect(findRelayRun('grep -n x ~/.claude/skills/codex-delegate/scripts/relay.mjs')).toBeUndefined()
+    expect(findRelayRun("sed -n 1,9p codex-delegate/scripts/relay.mjs | node -e 'x'")).toBeUndefined()
+    expect(findRelayRun('cat b.txt | node /x/agy-delegate/scripts/relay.mjs --cd .')?.skill).toBe('agy-delegate')
   })
 
   test('inserts --out-dir after the script, before redirects', () => {
@@ -180,8 +193,6 @@ describe('the relay watch', () => {
     const c = fakeEngine(on)
     let ran = ''
     on('tool.call', { tool: 'Bash' }, ($, e) => { ran = e.command; return { result: { stdout: 'ok' } } as never })
-  on('ui.log', () => ({ value: undefined }) as never)
-  on('ui.status', () => ({ value: undefined }) as never)
     await start($)
     await $.tool.call({ tool: 'Bash', command: 'node /h/codex-delegate/scripts/relay.mjs --brief b.txt', description: 'run', run_in_background: true } as never)
     const out = /--out-dir '([^']+)'/.exec(ran)?.[1] ?? ''
@@ -191,7 +202,8 @@ describe('the relay watch', () => {
     c.ticks[0]?.()
     await settle()
     expect(c.toasts.at(-1)).toBe('codex finished: completed, 1 file touched — review the diff')
-    expect(c.store.get('watches')).toEqual([])
+    const runs = c.store.get('runs') as { status: string }[]
+    expect(runs[0]?.status).toBe('completed')
   })
 
   test('a foreground run toasts its result, or that it left none', async ($, on) => {
@@ -202,8 +214,6 @@ describe('the relay watch', () => {
       if (writes) c.files.set(`${out}/result.json`, '{"status":"failed","touchedFiles":[]}')
       return { result: { stdout: 'done' } } as never
     })
-    on('ui.log', () => ({ value: undefined }) as never)
-    on('ui.status', () => ({ value: undefined }) as never)
     await start($)
     const call = { tool: 'Bash', command: 'node /h/agy-delegate/scripts/relay.mjs --brief b', description: 'run' } as never
     await $.tool.call(call)
@@ -211,7 +221,7 @@ describe('the relay watch', () => {
     writes = false
     await $.tool.call(call)
     expect(c.toasts.at(-1)).toContain('agy relay ended without a result.json')
-    expect(c.store.get('watches')).toEqual([])
+    expect((c.store.get('runs') as { status: string }[]).map((r) => r.status)).toEqual(['no-result', 'failed'])
   })
 
   test('an --out-dir it cannot resolve ($VAR, ~) is left alone, unwatched', async ($, on) => {
@@ -222,6 +232,67 @@ describe('the relay watch', () => {
     const command = 'node /h/codex-delegate/scripts/relay.mjs --out-dir "$OUT" --brief b'
     await $.tool.call({ tool: 'Bash', command, description: 'run', run_in_background: true } as never)
     expect(ran).toBe(command)
-    expect(c.store.get('watches')).toBeUndefined()
+    expect(c.store.get('runs')).toBeUndefined()
+  })
+})
+
+describe('runs helpers', () => {
+  test('summarizes codex, claude and plain log lines', () => {
+    expect(summarizeEvent('{"type":"item.completed","item":{"type":"command_execution","command":"npm test"}}'))
+      .toBe('item.completed: npm test')
+    expect(summarizeEvent('{"type":"assistant","message":{"content":[{"type":"text","text":"Editing  src/a.ts"}]}}'))
+      .toBe('assistant: Editing src/a.ts')
+    expect(summarizeEvent('agy: wrote file x')).toBe('agy: wrote file x')
+    expect(summarizeEvent('   ')).toBeUndefined()
+    expect(summarizeEvent(`{"type":"t","text":"${'x'.repeat(300)}"}`)?.length).toBe(110)
+  })
+
+  test('continue and resume use the session id and workdir', () => {
+    const run = { ...newRun('codex-delegate', '/o', 0), status: 'completed', sessionId: 'th_1', workdir: '/repo' }
+    expect(continueText(run)).toContain('/codex-delegate Continue')
+    expect(continueText(run)).toContain('--session th_1 --cd /repo')
+    expect(resumeCommand(run)).toBe("cd '/repo' && codex resume th_1")
+    expect(resumeCommand({ ...run, skill: 'kimi-delegate' })).toBeUndefined()
+    expect(resumeCommand({ ...run, sessionId: null })).toBeUndefined()
+    expect(age(65_000)).toBe('1m')
+    expect(age(3_900_000)).toBe('1h 05m')
+  })
+})
+
+describe('the Delegates pane', () => {
+  test('shows the live tail, then Continue and Copy resume once done', async ($, on) => {
+    const c = fakeEngine(on)
+    let out = ''
+    on('tool.call', { tool: 'Bash' }, ($, e) => {
+      out = /--out-dir '([^']+)'/.exec(e.command)?.[1] ?? ''
+      return { result: { stdout: 'ok' } } as never
+    })
+    await start($)
+    await $.tool.call({ tool: 'Bash', command: 'node /h/codex-delegate/scripts/relay.mjs --brief b', description: 'run', run_in_background: true } as never)
+    c.files.set(`${out}/events.jsonl`, '{"type":"item.started","item":{"command":"npm test"}}\n')
+    c.ticks[0]?.()
+    await settle()
+    const mount = () => $.ui.mount({ plugin: 'delegate-launcher', surface: 'terminal', component: 'Pane', requestId: 'delegate-runs', props: {} as never })
+    let pane = await mount()
+    expect(await pane.find({ type: 'Text', text: /item.started: npm test/ })).toBeDefined()
+    expect(await pane.find({ type: 'Button', key: 'continue' })).toBeUndefined()
+    await pane.unmount()
+    c.files.set(`${out}/result.json`, '{"status":"completed","touchedFiles":[],"threadId":"th_9","workdir":"/repo"}')
+    c.ticks[1]?.()
+    await settle()
+    pane = await mount()
+    await pane.press({ key: 'continue' })
+    expect(c.filled.at(-1)).toContain('--session th_9 --cd /repo')
+    await pane.press({ key: 'resume' })
+    expect(c.copied.at(-1)).toBe("cd '/repo' && codex resume th_9")
+    await pane.press({ key: 'clear' })
+    expect(c.store.get('runs')).toEqual([])
+  })
+
+  test('the band shows a runs button once a run exists', async ($, on) => {
+    fakeEngine(on, { enabled: ['codex-delegate'], runs: [{ ...newRun('codex-delegate', '/o', 0), status: 'completed' }] })
+    await start($)
+    const ui = await band($, 'terminal')
+    expect(await ui.find({ type: 'Button', key: 'runs' })).toBeDefined()
   })
 })
